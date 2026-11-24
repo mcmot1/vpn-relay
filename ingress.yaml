@@ -1,0 +1,38 @@
+services:
+  - name: awg-ingress
+    addr: "0.0.0.0:51820"
+    handler:
+      type: udp
+      chain: to-egress
+    listener:
+      type: udp
+      metadata:
+        keepalive: true
+        ttl: 2m
+    forwarder:
+      nodes:
+        - name: awg
+          addr: "127.0.0.1:51821"
+
+chains:
+  - name: to-egress
+    hops:
+      - name: egress-hop
+        nodes:
+          - name: egress
+            addr: "vpn-egress.example.com:443"
+            connector:
+              type: relay
+              auth:
+                username: awg-relay
+                password: "REPLACE_WITH_SHARED_SECRET"
+            dialer:
+              type: wss
+              tls:
+                secure: true
+                serverName: vpn-egress.example.com
+              metadata:
+                path: /relay
+
+log:
+  level: warn

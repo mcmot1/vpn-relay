@@ -1,0 +1,5 @@
+*.local.yaml
+*.pem
+*.key
+.build/
+dist/

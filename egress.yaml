@@ -1,0 +1,22 @@
+services:
+  - name: awg-egress
+    addr: "0.0.0.0:443"
+    handler:
+      type: relay
+      auth:
+        username: awg-relay
+        password: "REPLACE_WITH_SHARED_SECRET"
+    listener:
+      type: wss
+      tls:
+        certFile: /run/credentials/vpn-relay.service/fullchain.pem
+        keyFile: /run/credentials/vpn-relay.service/privkey.pem
+      metadata:
+        path: /relay
+    forwarder:
+      nodes:
+        - name: awg
+          addr: "127.0.0.1:51821"
+
+log:
+  level: warn
