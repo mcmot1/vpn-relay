@@ -7,8 +7,8 @@ Usage: bash install.sh ingress|egress|vpn [baseline|experimental]
 
   ingress          Install the GOST ingress relay and its configuration template.
   egress           Install the GOST egress relay and its configuration template.
-  vpn              Build and install the experimental userspace AmneziaWG binary.
-  vpn baseline     Build and install the baseline userspace AmneziaWG binary.
+  vpn              Install the experimental userspace AmneziaWG binary.
+  vpn baseline     Install the baseline userspace AmneziaWG binary.
 EOF
 }
 
@@ -35,19 +35,33 @@ fi
 work_dir=$(mktemp -d)
 trap 'rm -rf -- "$work_dir"' EXIT
 
+case $(uname -m) in
+    x86_64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) fail 'The installer supports Linux amd64 and arm64.' ;;
+esac
+
 if [[ $1 == vpn ]]; then
     variant=${2:-experimental}
-    command -v go >/dev/null || fail 'Go 1.25 or newer is required.'
-    build_flags=(-trimpath)
-    if [[ $variant == experimental ]]; then
-        build_flags+=(-tags awg_experimental)
-    fi
     binary=amneziawg-go-$variant
-    (
-        cd -- "$project_dir/amneziawg-fork"
-        CGO_ENABLED=0 GOOS=linux GOARCH= go build "${build_flags[@]}" -o "$work_dir/$binary" .
-    )
-    "${as_root[@]}" install -m 0755 "$work_dir/$binary" "/usr/local/bin/$binary"
+    if [[ -f $project_dir/release-bin/architecture ]]; then
+        read -r release_arch < "$project_dir/release-bin/architecture"
+        [[ $release_arch == "$arch" ]] || fail "This release is for $release_arch. Download the $arch archive."
+        binary_path=$project_dir/release-bin/$binary
+        [[ -f $binary_path ]] || fail "Release archive is missing $binary."
+    else
+        command -v go >/dev/null || fail 'Go 1.25 or newer is required for a source checkout.'
+        build_flags=(-trimpath)
+        if [[ $variant == experimental ]]; then
+            build_flags+=(-tags awg_experimental)
+        fi
+        binary_path=$work_dir/$binary
+        (
+            cd -- "$project_dir/amneziawg-fork"
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build "${build_flags[@]}" -o "$binary_path" .
+        )
+    fi
+    "${as_root[@]}" install -m 0755 "$binary_path" "/usr/local/bin/$binary"
     printf 'Installed /usr/local/bin/%s\n' "$binary"
     exit 0
 fi
@@ -55,10 +69,9 @@ fi
 role=$1
 setup_dir=/etc/vpn-relay
 systemd_dir=/etc/systemd/system
-case $(uname -m) in
-    x86_64) arch=amd64; checksum=f4c1255dc892a7014c0ad6e5f1c3573108f7bea4403f04f21873406ab58aa666 ;;
-    aarch64|arm64) arch=arm64; checksum=4c704c92df6eeea8a3b08d0de4fd3c44343095a20136b3b6cf334f98d2f174ab ;;
-    *) fail 'GOST relay installer supports amd64 and arm64.' ;;
+case $arch in
+    amd64) checksum=f4c1255dc892a7014c0ad6e5f1c3573108f7bea4403f04f21873406ab58aa666 ;;
+    arm64) checksum=4c704c92df6eeea8a3b08d0de4fd3c44343095a20136b3b6cf334f98d2f174ab ;;
 esac
 
 if "${as_root[@]}" test -e "$setup_dir/role"; then

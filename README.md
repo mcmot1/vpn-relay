@@ -4,14 +4,26 @@
 
 ## Установка из GitHub
 
-На обеих Linux-машинах клонируйте репозиторий через GitHub CLI с авторизованным доступом или через SSH с ключом, которому разрешено чтение репозитория:
+Репозиторий приватный. На каждом VPS войдите в GitHub CLI под учётной записью с доступом к `mcmot1/vpn-relay` или передайте GitHub CLI токен с правом чтения репозитория через `GH_TOKEN`. Скачайте выпуск обычным пользователем. Для готовых сборок Go не нужен.
 
-```sh
-gh repo clone mcmot1/vpn-relay
-cd vpn-relay
+```bash
+gh auth login --hostname github.com
+release=v0.1.0
+case $(uname -m) in
+    x86_64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) printf '%s\n' 'Поддерживаются только amd64 и arm64.' >&2; exit 1 ;;
+esac
+archive=vpn-relay-linux-$arch.tar.gz
+mkdir -p "vpn-relay-$release" && cd "vpn-relay-$release" &&
+    gh release download "$release" --repo mcmot1/vpn-relay --pattern "$archive" --pattern SHA256SUMS &&
+    sha256sum --ignore-missing --check SHA256SUMS &&
+    tar -xzf "$archive" && cd "vpn-relay-linux-$arch"
 ```
 
-На входном VPS выполните `bash install.sh ingress`. На удалённом VPS выполните `bash install.sh egress` и `bash install.sh vpn`. Штатная сборка для контрольных измерений и отката устанавливается командой `bash install.sh vpn baseline`. Для сборки нужен Go 1.25 или новее. Установщик релея поддерживает Linux `amd64` и `arm64`, скачивает GOST с GitHub и сверяет SHA-256 до установки.
+На входном VPS выполните `bash install.sh ingress`. На удалённом VPS выполните `bash install.sh egress` и `bash install.sh vpn experimental`. Штатная сборка для контрольных измерений и отката устанавливается командой `bash install.sh vpn baseline`. Установщик релея скачивает GOST с GitHub и сверяет SHA-256 до установки.
+
+Тот же установщик работает из копии исходников, полученной через `gh repo clone mcmot1/vpn-relay`. В этом режиме для `bash install.sh vpn` требуется Go 1.25 или новее. Для подготовки обоих архивов из исходников используется `bash scripts/package-release.sh`.
 
 Установщик кладёт шаблон релея в `/etc/vpn-relay/config.example.yaml`. Скопируйте его в `/etc/vpn-relay/config.yaml`, только если активной конфигурации ещё нет. Подставьте параметры из разделов ниже, добавьте PEM-файлы на удалённом VPS и запустите `sudo systemctl enable --now vpn-relay.service`. Команда `vpn` устанавливает бинарник в `/usr/local/bin/`. Его нужно выбрать в существующей userspace-службе AmneziaWG и применить конфигурацию интерфейса. Firewall, ключи VPN и существующие конфигурации настраиваются отдельно.
 
