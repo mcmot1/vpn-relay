@@ -11,6 +11,8 @@ Usage: bash install.sh ingress|egress|vpn [baseline|experimental|smooth|adaptive
   vpn baseline     Install the baseline userspace AmneziaWG binary.
   vpn smooth       Install AmneziaWG with the experimental padding without size buckets.
   vpn adaptive     Install AmneziaWG with per-peer adaptive padding limits.
+
+After installation, run sudo vpn-relay-configure --help.
 EOF
 }
 
@@ -66,6 +68,7 @@ if [[ $1 == vpn ]]; then
         )
     fi
     "${as_root[@]}" install -m 0755 "$binary_path" "/usr/local/bin/$binary"
+    "${as_root[@]}" install -m 0755 "$project_dir/configure.py" /usr/local/sbin/vpn-relay-configure
     printf 'Installed /usr/local/bin/%s\n' "$binary"
     exit 0
 fi
@@ -103,7 +106,9 @@ if [[ $role == egress ]]; then
     "${as_root[@]}" install -D -m 0644 "$project_dir/egress-tls.conf" "$systemd_dir/vpn-relay.service.d/tls.conf"
 fi
 "${as_root[@]}" install -m 0644 "$project_dir/vpn-relay.service" "$systemd_dir/vpn-relay.service"
+"${as_root[@]}" install -m 0755 "$project_dir/configure.py" /usr/local/sbin/vpn-relay-configure
 printf '%s\n' "$role" > "$work_dir/role"
 "${as_root[@]}" install -m 0600 "$work_dir/role" "$setup_dir/role"
 "${as_root[@]}" systemctl daemon-reload
 printf 'Installed %s relay. Configuration template: %s/config.example.yaml\n' "$role" "$setup_dir"
+printf 'Configure it with: sudo vpn-relay-configure %s --help\n' "$role"

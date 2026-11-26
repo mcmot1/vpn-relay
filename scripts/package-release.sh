@@ -11,7 +11,7 @@ trap 'rm -rf -- "$work_dir"' EXIT
 for arch in amd64 arm64; do
     bundle="$work_dir/vpn-relay-linux-$arch"
     mkdir -p -- "$bundle/release-bin"
-    for file in install.sh ingress.yaml egress.yaml vpn-relay.service egress-tls.conf README.md; do
+    for file in install.sh configure.py ingress.yaml egress.yaml vpn-relay.service egress-tls.conf README.md; do
         install -m 0644 "$project_dir/$file" "$bundle/$file"
     done
     install -m 0644 "$project_dir/amneziawg-fork/LICENSE" "$bundle/LICENSE-AmneziaWG"

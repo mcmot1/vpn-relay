@@ -4,12 +4,12 @@
 
 ## Установка из GitHub на Ubuntu 24.04
 
-Выполните на каждом VPS в Bash от обычного пользователя с доступом к `sudo`. Репозиторий приватный. Для скачивания требуется учётная запись с доступом к `mcmot1/vpn-relay` или токен с правом чтения репозитория, переданный через `GH_TOKEN`. [Выпуск `v0.3.0`](https://github.com/mcmot1/vpn-relay/releases/tag/v0.3.0) содержит готовые сборки для `amd64` и `arm64`. Go для установки не нужен.
+Выполните на каждом VPS в Bash от обычного пользователя с доступом к `sudo`. Репозиторий приватный. Для скачивания требуется учётная запись с доступом к `mcmot1/vpn-relay` или токен с правом чтения репозитория, переданный через `GH_TOKEN`. [Выпуск `v0.4.0`](https://github.com/mcmot1/vpn-relay/releases/tag/v0.4.0) содержит готовые сборки для `amd64` и `arm64`. Go для установки не нужен.
 
 ```bash
-sudo apt-get update && sudo apt-get install -y ca-certificates curl gh openssl
+sudo apt-get update && sudo apt-get install -y ca-certificates curl gh openssl python3
 gh auth status --hostname github.com || gh auth login --hostname github.com --web
-release=v0.3.0
+release=v0.4.0
 case $(uname -m) in
     x86_64) arch=amd64 ;;
     aarch64|arm64) arch=arm64 ;;
@@ -38,7 +38,7 @@ bash install.sh egress && bash install.sh vpn adaptive
 
 Тот же установщик работает из копии исходников, полученной через `gh repo clone mcmot1/vpn-relay`. В этом режиме для `bash install.sh vpn` требуется Go 1.25 или новее. Для подготовки обоих архивов из исходников используется `bash scripts/package-release.sh`.
 
-Установщик кладёт шаблон релея в `/etc/vpn-relay/config.example.yaml`. Скопируйте его в `/etc/vpn-relay/config.yaml`, только если активной конфигурации ещё нет. Подставьте параметры из разделов ниже, добавьте PEM-файлы на удалённом VPS и запустите `sudo systemctl enable --now vpn-relay.service`. Команда `vpn` устанавливает бинарник в `/usr/local/bin/`. Его нужно выбрать в существующей userspace-службе AmneziaWG и применить конфигурацию интерфейса. Firewall, ключи VPN и существующие конфигурации настраиваются отдельно.
+После установки настройте [удалённый VPS](#удалённый-vps) и [входной VPS](#входной-vps) через `sudo vpn-relay-configure`. На входном VPS параметр `--remote-host` задаёт доменное имя удалённого сервера. Команда `vpn` устанавливает бинарник в `/usr/local/bin/`. Его нужно выбрать в существующей userspace-службе AmneziaWG и применить конфигурацию интерфейса.
 
 ## Эксперимент с длинами датаграмм
 
@@ -92,46 +92,51 @@ go build -trimpath -tags awg_adaptive -o ../dist/amneziawg-go-adaptive .
 
 ## Подготовка
 
-1. Установите [GOST 3.3.3](https://github.com/go-gost/gost/releases/tag/v3.3.3) на оба Linux VPS как `/usr/local/bin/gost`. Выберите архив для своей архитектуры и сверьте SHA-256 с опубликованным `checksums.txt`. Для сервиса нужен systemd с поддержкой `LoadCredential`.
-2. Направьте A-запись домена межсерверного транспорта на удалённый VPS и подготовьте TLS-сертификат для этого домена. У конфигураций IPv4-прослушивание. Для домена с AAAA-записью потребуется также настроить IPv6-прослушивание и firewall либо убрать AAAA.
-3. Создайте отдельный случайный секрет релея командой `openssl rand -hex 32`. Подставьте его вместо `REPLACE_WITH_SHARED_SECRET` в обеих конфигурациях. В `ingress.yaml` замените `vpn-egress.example.com` в `addr` и `serverName` на домен из TLS-сертификата. Если используется собственный CA, укажите `dialer.tls.caFile` на доверенный PEM этого CA и сохраните `secure: true`.
+1. Направьте A-запись домена межсерверного транспорта на удалённый VPS и получите TLS-сертификат для этого домена. У конфигураций IPv4-прослушивание. Для домена с AAAA-записью потребуется также настроить IPv6-прослушивание и firewall либо убрать AAAA.
+2. Один раз создайте общий секрет командой `openssl rand -hex 32`. Введите этот же секрет в конфигураторе на обоих VPS. Конфигуратор запрашивает секрет отдельно и сохраняет его в закрытом файле `/etc/vpn-relay/config.yaml`.
 
 ## Удалённый VPS
 
-1. Проверьте, что VPN принимает датаграммы на `127.0.0.1:51821/udp` с сетевого пространства хоста. Для AmneziaWG на хосте используйте соответствующий `ListenPort`. Если он в Docker, опубликуйте UDP-порт только на loopback хоста. Например, для внутреннего порта `51820/udp` укажите `127.0.0.1:51821:51820/udp`. Если локальный порт другой, обновите адрес цели в обеих конфигурациях GOST.
+1. Проверьте, что VPN принимает датаграммы на `127.0.0.1:51821/udp` с сетевого пространства хоста. Для AmneziaWG на хосте используйте соответствующий `ListenPort`. Если он в Docker, опубликуйте UDP-порт только на loopback хоста. Например, для внутреннего порта `51820/udp` укажите `127.0.0.1:51821:51820/udp`. Если локальный порт другой, укажите его через `--awg-port` в командах настройки обоих VPS.
 2. В firewall VPS и правилах провайдера разрешите доступ к `443/tcp` с исходящего IP входного VPS. Ограничьте прямой внешний доступ к UDP-порту AWG, учитывая действующих клиентов. При Docker проверьте фактическую публикацию портов и правила провайдера. Маршрутизация и NAT для VPN-клиентов выполняются на удалённом VPS.
-3. После установки через Bash скопируйте TLS-материалы и подготовьте активную конфигурацию. Для ручной установки выполните все команды ниже. Если Bash уже установил релей, unit и drop-in уже на месте. Выполните из каталога с подготовленными файлами, указав реальные пути к PEM-файлам:
+3. После `bash install.sh egress` создайте конфигурацию, указав реальные пути к сертификату и ключу. Введите общий секрет, когда программа его запросит.
 
    ```sh
-   sudo install -d -m 0700 /etc/vpn-relay /etc/vpn-relay/tls
-   sudo install -m 0600 egress.yaml /etc/vpn-relay/config.yaml
-   sudo install -m 0600 fullchain.pem /etc/vpn-relay/tls/fullchain.pem
-   sudo install -m 0600 privkey.pem /etc/vpn-relay/tls/privkey.pem
-   sudo install -m 0644 vpn-relay.service /etc/systemd/system/vpn-relay.service
-   sudo install -D -m 0644 egress-tls.conf /etc/systemd/system/vpn-relay.service.d/tls.conf
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now vpn-relay.service
+   sudo vpn-relay-configure egress --fullchain /path/to/fullchain.pem --privkey /path/to/privkey.pem
+   sudo systemctl enable vpn-relay.service && sudo systemctl restart vpn-relay.service
    ```
 
-   При продлении сертификата обновите обе копии PEM и перезапустите `vpn-relay.service`. Перед запуском убедитесь, что порт `443/tcp` свободен.
+   При продлении сертификата обновите `/etc/vpn-relay/tls/fullchain.pem` и `/etc/vpn-relay/tls/privkey.pem`, затем перезапустите `vpn-relay.service`. Порт WSS по умолчанию `443/tcp`. Другой порт задайте через `--wss-port` на обоих VPS и в firewall.
 
 ## Входной VPS
 
-Разрешите входящий `51820/udp` для клиентских сетей и исходящий `443/tcp` до удалённого VPS. После установки через Bash подготовьте активную конфигурацию и запустите службу. Для ручной установки скопируйте исправленный `ingress.yaml` и unit-файл на входной сервер и выполните из каталога развёртывания:
+Разрешите входящий `51820/udp` для клиентских сетей и исходящий `443/tcp` до удалённого VPS. После `bash install.sh ingress` подставьте **домен удалённого VPS из TLS-сертификата** и введите тот же общий секрет:
 
 ```sh
-sudo install -d -m 0700 /etc/vpn-relay
-sudo install -m 0600 ingress.yaml /etc/vpn-relay/config.yaml
-sudo install -m 0644 vpn-relay.service /etc/systemd/system/vpn-relay.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now vpn-relay.service
+sudo vpn-relay-configure ingress --remote-host exit.example.net
+sudo systemctl enable vpn-relay.service && sudo systemctl restart vpn-relay.service
 ```
 
-Для изменений конфигурации перезапустите `vpn-relay.service`. Просмотр ошибок на обоих VPS — `sudo journalctl -u vpn-relay.service -n 50 --no-pager`.
+На входном VPS адрес удалённого сервера хранится в `/etc/vpn-relay/config.yaml`, в разделе `chains → to-egress → egress-hop → egress → addr`. Имя из TLS-сертификата записывается туда же в `dialer.tls.serverName`. Посмотреть адрес и порт без вывода секрета можно командой `sudo grep -A1 -- '- name: egress$' /etc/vpn-relay/config.yaml`. Для частного CA укажите `dialer.tls.caFile` на читаемый службой PEM и сохраните `secure: true`.
+
+При перезаписи конфигуратор сохраняет предыдущий YAML в `/etc/vpn-relay/config.yaml.previous`. После правок перезапустите `vpn-relay.service`. Просмотр ошибок на обоих VPS — `sudo journalctl -u vpn-relay.service -n 50 --no-pager`.
 
 ## Клиент и проверка
 
-1. В копии действующего клиентского профиля замените `Endpoint` на IPv4-адрес или имя входного VPS с портом `51820`. Ключ сервера, адреса туннеля, `AllowedIPs` и параметры AmneziaWG берутся из действующего профиля удалённого VPN-сервера.
+Для нового клиента выполните на **удалённом VPS**, где запущен интерфейс AmneziaWG и доступна утилита `awg` с поддержкой AmneziaWG 3.1. Команда рассчитана на сервер с постоянным конфигурационным файлом в формате `awg-quick`. Подставьте имя интерфейса, путь к его файлу, свободный адрес в подсети туннеля и **адрес входного VPS**:
+
+```bash
+sudo vpn-relay-configure client \
+  --interface awg0 \
+  --server-config /etc/amnezia/amneziawg/awg0.conf \
+  --address 10.8.0.2/32 \
+  --endpoint entry.example.net:51820 \
+  --output /root/phone.conf
+```
+
+Команда выдаёт новые ключи, сохраняет peer в настройках интерфейса и добавляет его в работающий AmneziaWG. Клиентский файл имеет права `0600`. По умолчанию через VPN направляется IPv4-трафик. Для других маршрутов задайте `--allowed-ips`, а для явного DNS — `--dns`. Передайте `.conf` на клиентское устройство и импортируйте его в AmneziaWG 3.1.
+
+1. Для существующего клиента достаточно поменять `Endpoint` в копии его профиля на адрес входного VPS с портом `51820`.
 2. Подключитесь и проверьте свежее рукопожатие в клиенте и на удалённом VPS через `awg show` в том же сетевом пространстве, где работает VPN. Затем передайте данные в туннеле. Если профиль направляет интернет-трафик в туннель, внешний адрес клиента должен совпасть с адресом выхода удалённого VPS.
 3. Проверьте два клиента одновременно и повторите подключение после паузы, перезапуска релея и смены сети на клиенте. Проверьте извне, что прямой вход на AWG-порт удалённого VPS закрыт, а `443/tcp` доступен с входного VPS.
 
