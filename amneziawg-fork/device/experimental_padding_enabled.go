@@ -1,7 +1,7 @@
-//go:build awg_experimental
+//go:build awg_experimental && !awg_smooth
 
 // SPDX-License-Identifier: MIT
 
 package device
 
-const experimentalPaddingEnabled = true
+const experimentalPaddingProfile = paddingProfileGrid

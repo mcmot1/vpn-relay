@@ -625,9 +625,13 @@ func (device *Device) RoutineEncryption(id int) {
 				// pad content to multiple of 16
 				paddingSize = calculatePaddingSize(len(elem.packet), mtu)
 			}
-			if experimentalPaddingEnabled && !elem.isKeepalive && mtu > 0 {
+			if experimentalPaddingProfile != paddingProfileBaseline && !elem.isKeepalive && mtu > 0 {
 				sizeLimit := min(int(elem.peer.udpWindow.Load()), mtu+MinMessageSize+int(elem.padding), len(elem.buffer))
-				paddingSize += experimentalExtraPadding(packetSize+paddingSize, sizeLimit)
+				if experimentalPaddingProfile == paddingProfileSmooth {
+					paddingSize += smoothExtraPadding(packetSize+paddingSize, sizeLimit)
+				} else {
+					paddingSize += experimentalExtraPadding(packetSize+paddingSize, sizeLimit)
+				}
 			}
 
 			// append trailing zeroes

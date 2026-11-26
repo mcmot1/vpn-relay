@@ -1,33 +1,50 @@
 # Экспериментальный AmneziaWG с входным узлом
 
-Исходники VPN-сервера находятся в `amneziawg-fork/`. База форка — [AmneziaWG `v3.1.20261116`](https://github.com/amnezia-vpn/amneziawg-go/tree/v3.1.20261116), коммит `08fe3d33bbb116be09a6183d02609311b8b0c9e8`. Входной узел продолжает пересылать датаграммы через GOST Relay в WSS. Для сравнения доступны две сборки VPN-сервера с одной и той же базой.
+Исходники VPN-сервера находятся в `amneziawg-fork/`. База форка — [AmneziaWG `v3.1.20261116`](https://github.com/amnezia-vpn/amneziawg-go/tree/v3.1.20261116), коммит `08fe3d33bbb116be09a6183d02609311b8b0c9e8`. Входной узел продолжает пересылать датаграммы через GOST Relay в WSS. Для сравнения доступны штатная и две экспериментальные сборки VPN-сервера с одной и той же базой.
 
-## Установка из GitHub
+## Установка из GitHub на Ubuntu 24.04
 
-Репозиторий приватный. На каждом VPS войдите в GitHub CLI под учётной записью с доступом к `mcmot1/vpn-relay` или передайте GitHub CLI токен с правом чтения репозитория через `GH_TOKEN`. Скачайте выпуск обычным пользователем. Для готовых сборок Go не нужен.
+Выполните на каждом VPS в Bash от обычного пользователя с доступом к `sudo`. Репозиторий приватный. Для скачивания требуется учётная запись с доступом к `mcmot1/vpn-relay` или токен с правом чтения репозитория, переданный через `GH_TOKEN`. [Выпуск `v0.2.0`](https://github.com/mcmot1/vpn-relay/releases/tag/v0.2.0) содержит готовые сборки для `amd64` и `arm64`. Go для установки не нужен.
 
 ```bash
-gh auth login --hostname github.com
-release=v0.1.0
+sudo apt-get update && sudo apt-get install -y ca-certificates curl gh openssl
+gh auth status --hostname github.com || gh auth login --hostname github.com --web
+release=v0.2.0
 case $(uname -m) in
     x86_64) arch=amd64 ;;
     aarch64|arm64) arch=arm64 ;;
     *) printf '%s\n' 'Поддерживаются только amd64 и arm64.' >&2; exit 1 ;;
 esac
 archive=vpn-relay-linux-$arch.tar.gz
-mkdir -p "vpn-relay-$release" && cd "vpn-relay-$release" &&
+download_dir=$(mktemp -d "$HOME/vpn-relay-$release.XXXXXX") && cd "$download_dir" &&
     gh release download "$release" --repo mcmot1/vpn-relay --pattern "$archive" --pattern SHA256SUMS &&
     sha256sum --ignore-missing --check SHA256SUMS &&
     tar -xzf "$archive" && cd "vpn-relay-linux-$arch"
 ```
 
-На входном VPS выполните `bash install.sh ingress`. На удалённом VPS выполните `bash install.sh egress` и `bash install.sh vpn experimental`. Штатная сборка для контрольных измерений и отката устанавливается командой `bash install.sh vpn baseline`. Установщик релея скачивает GOST с GitHub и сверяет SHA-256 до установки.
+После распаковки выполните на входном VPS:
+
+```bash
+bash install.sh ingress
+```
+
+На удалённом VPS установите релей и экспериментальную сборку AmneziaWG `smooth`:
+
+```bash
+bash install.sh egress && bash install.sh vpn smooth
+```
+
+Для контрольных измерений доступны `bash install.sh vpn baseline` и `bash install.sh vpn experimental`. Установщик релея скачивает GOST с GitHub и сверяет SHA-256 до установки.
 
 Тот же установщик работает из копии исходников, полученной через `gh repo clone mcmot1/vpn-relay`. В этом режиме для `bash install.sh vpn` требуется Go 1.25 или новее. Для подготовки обоих архивов из исходников используется `bash scripts/package-release.sh`.
 
 Установщик кладёт шаблон релея в `/etc/vpn-relay/config.example.yaml`. Скопируйте его в `/etc/vpn-relay/config.yaml`, только если активной конфигурации ещё нет. Подставьте параметры из разделов ниже, добавьте PEM-файлы на удалённом VPS и запустите `sudo systemctl enable --now vpn-relay.service`. Команда `vpn` устанавливает бинарник в `/usr/local/bin/`. Его нужно выбрать в существующей userspace-службе AmneziaWG и применить конфигурацию интерфейса. Firewall, ключи VPN и существующие конфигурации настраиваются отдельно.
 
 ## Эксперимент с длинами датаграмм
+
+Сборка `smooth` (`awg_smooth`) сохраняет штатный паддинг AmneziaWG и равновероятно добавляет от 0 до 160 байт к датаграмме с данными. Дополнительный диапазон сужается до половины оставшегося запаса по мере приближения к лимиту. Верхняя граница для добавки учитывает лимиты исходного форка и экспериментальный потолок UDP-полезной нагрузки в 1200 байт. Если датаграмма уже достигла потолка или превышает его, профиль оставляет её без дополнительного паддинга. Потолок относится только к экспериментальной добавке. Для маршрута с меньшим MTU настройте MTU VPN отдельно.
+
+Синтетический замер на одинаковом наборе исходных длин запускается из `amneziawg-fork` командой `go test ./device -run '^TestPaddingProfilesOnFixedLengths$' -count=1 -v`. Он показывает число наблюдавшихся длин, долю датаграмм в полосах сеточного профиля и накладные расходы. Тест не измеряет распознаваемость сетевым фильтром.
 
 Сборка с тегом `awg_experimental` добавляет паддинг к исходящим пакетам с IP-данными после штатной обработки длины и до шифрования. Если в текущий предел размера помещается весь диапазон, длина UDP-датаграммы округляется вверх до границы в 128 байт и увеличивается ещё на случайные 0–31 байт. При расчёте предела учитываются UDP-окно узла, MTU туннеля с накладными расходами AWG и размер буфера. Рукопожатия и keepalive идут штатным путём.
 
@@ -43,8 +60,10 @@ mkdir -p "vpn-relay-$release" && cd "vpn-relay-$release" &&
 cd amneziawg-fork
 go test ./...
 go test -tags awg_experimental ./...
+go test -tags awg_smooth ./...
 go build -trimpath -o ../dist/amneziawg-go-baseline .
 go build -trimpath -tags awg_experimental -o ../dist/amneziawg-go-experimental .
+go build -trimpath -tags awg_smooth -o ../dist/amneziawg-go-smooth .
 ```
 
 Используйте выбранный бинарник в userspace-службе AmneziaWG на удалённом VPS. Она должна запускать выбранный файл вместо штатного `amneziawg-go` и применять существующую конфигурацию интерфейса. При установке через kernel-модуль потребуется отдельный userspace-интерфейс для эксперимента. Для отката запустите userspace-службу с `amneziawg-go-baseline`. Путь от клиента и настройки релея для обеих сборок одинаковы.

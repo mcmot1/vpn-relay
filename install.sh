@@ -3,12 +3,13 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: bash install.sh ingress|egress|vpn [baseline|experimental]
+Usage: bash install.sh ingress|egress|vpn [baseline|experimental|smooth]
 
   ingress          Install the GOST ingress relay and its configuration template.
   egress           Install the GOST egress relay and its configuration template.
   vpn              Install the experimental userspace AmneziaWG binary.
   vpn baseline     Install the baseline userspace AmneziaWG binary.
+  vpn smooth       Install AmneziaWG with the experimental padding without size buckets.
 EOF
 }
 
@@ -20,7 +21,7 @@ fail() {
 case ${1:-} in
     -h|--help) usage; exit 0 ;;
     ingress|egress) [[ $# -eq 1 ]] || fail 'Expected one relay role.' ;;
-    vpn) [[ $# -le 2 && ${2:-experimental} =~ ^(baseline|experimental)$ ]] || fail 'Invalid VPN build variant.' ;;
+    vpn) [[ $# -le 2 && ${2:-experimental} =~ ^(baseline|experimental|smooth)$ ]] || fail 'Invalid VPN build variant.' ;;
     *) usage >&2; exit 2 ;;
 esac
 
@@ -52,9 +53,10 @@ if [[ $1 == vpn ]]; then
     else
         command -v go >/dev/null || fail 'Go 1.25 or newer is required for a source checkout.'
         build_flags=(-trimpath)
-        if [[ $variant == experimental ]]; then
-            build_flags+=(-tags awg_experimental)
-        fi
+        case $variant in
+            experimental) build_flags+=(-tags awg_experimental) ;;
+            smooth) build_flags+=(-tags awg_smooth) ;;
+        esac
         binary_path=$work_dir/$binary
         (
             cd -- "$project_dir/amneziawg-fork"

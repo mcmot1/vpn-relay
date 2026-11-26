@@ -20,6 +20,7 @@ for arch in amd64 arm64; do
         export CGO_ENABLED=0 GOOS=linux GOARCH=$arch
         go build -trimpath -buildvcs=false -o "$bundle/release-bin/amneziawg-go-baseline" .
         go build -trimpath -buildvcs=false -tags awg_experimental -o "$bundle/release-bin/amneziawg-go-experimental" .
+        go build -trimpath -buildvcs=false -tags awg_smooth -o "$bundle/release-bin/amneziawg-go-smooth" .
     )
     tar -C "$work_dir" -czf "$output_dir/vpn-relay-linux-$arch.tar.gz" "vpn-relay-linux-$arch"
 done
