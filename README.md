@@ -4,20 +4,20 @@
 
 ## Установка из GitHub на Ubuntu 24.04
 
-Выполните на каждом VPS в Bash от обычного пользователя с доступом к `sudo`. Репозиторий приватный. Для скачивания требуется учётная запись с доступом к `mcmot1/vpn-relay` или токен с правом чтения репозитория, переданный через `GH_TOKEN`. [Выпуск `v0.4.0`](https://github.com/mcmot1/vpn-relay/releases/tag/v0.4.0) содержит готовые сборки для `amd64` и `arm64`. Go для установки не нужен.
+Выполните на каждом VPS в Bash от обычного пользователя с доступом к `sudo`. [Выпуск `v0.5.0`](https://github.com/mcmot1/vpn-relay/releases/tag/v0.5.0) содержит готовые сборки для `amd64` и `arm64`. Архивы публичные. Для установки не нужны GitHub CLI, учётная запись или Go.
 
 ```bash
-sudo apt-get update && sudo apt-get install -y ca-certificates curl gh openssl python3
-gh auth status --hostname github.com || gh auth login --hostname github.com --web
-release=v0.4.0
+sudo apt-get update && sudo apt-get install -y ca-certificates curl openssl python3
+release=v0.5.0
 case $(uname -m) in
     x86_64) arch=amd64 ;;
     aarch64|arm64) arch=arm64 ;;
     *) printf '%s\n' 'Поддерживаются только amd64 и arm64.' >&2; exit 1 ;;
 esac
 archive=vpn-relay-linux-$arch.tar.gz
+base="https://github.com/mcmot1/vpn-relay/releases/download/$release"
 download_dir=$(mktemp -d "$HOME/vpn-relay-$release.XXXXXX") && cd "$download_dir" &&
-    gh release download "$release" --repo mcmot1/vpn-relay --pattern "$archive" --pattern SHA256SUMS &&
+    curl -fsSLO "$base/$archive" && curl -fsSLO "$base/SHA256SUMS" &&
     sha256sum --ignore-missing --check SHA256SUMS &&
     tar -xzf "$archive" && cd "vpn-relay-linux-$arch"
 ```
@@ -36,9 +36,15 @@ bash install.sh egress && bash install.sh vpn adaptive
 
 Если релей уже настроен, выполните на удалённом VPS только `bash install.sh vpn adaptive`. Для контрольных измерений доступны `bash install.sh vpn baseline`, `bash install.sh vpn experimental` и `bash install.sh vpn smooth`. Установщик релея скачивает GOST с GitHub и сверяет SHA-256 до установки.
 
-Тот же установщик работает из копии исходников, полученной через `gh repo clone mcmot1/vpn-relay`. В этом режиме для `bash install.sh vpn` требуется Go 1.25 или новее. Для подготовки обоих архивов из исходников используется `bash scripts/package-release.sh`.
+Тот же установщик работает из копии исходников, полученной через `git clone https://github.com/mcmot1/vpn-relay.git`. В этом режиме для `bash install.sh vpn` требуется Go 1.25 или новее. Для подготовки обоих архивов из исходников используется `bash scripts/package-release.sh`.
 
 После установки настройте [удалённый VPS](#удалённый-vps) и [входной VPS](#входной-vps) через `sudo vpn-relay-configure`. На входном VPS параметр `--remote-host` задаёт доменное имя удалённого сервера. Команда `vpn` устанавливает бинарник в `/usr/local/bin/`. Его нужно выбрать в существующей userspace-службе AmneziaWG и применить конфигурацию интерфейса.
+
+## Обновление
+
+Обновление запускает администратор. Выберите опубликованный тег, подставьте его в `release` в блоке скачивания выше и повторите скачивание и проверку SHA-256 на обоих VPS. Из нового архива выполните `bash install.sh ingress` на входном VPS и `bash install.sh egress && bash install.sh vpn adaptive` на удалённом. Если используете другую сборку AmneziaWG, укажите её вместо `adaptive`.
+
+Установщик обновляет исполняемые файлы, шаблоны и unit-файлы. Рабочий `/etc/vpn-relay/config.yaml`, TLS-материалы, параметры выпуска клиентов, клиентские `.conf` и конфигурация AmneziaWG сохраняются. Перезапустите `sudo systemctl restart vpn-relay.service` на каждом VPS. На удалённом VPS перезапустите также userspace-службу AmneziaWG, например `sudo systemctl restart awg-quick@awg0.service`, чтобы она загрузила новый бинарник. Действующие соединения могут кратковременно прерваться. Для отката повторите установку нужных компонентов из предыдущего проверенного выпуска и перезапустите службы.
 
 ## Эксперимент с длинами датаграмм
 
@@ -88,7 +94,7 @@ go build -trimpath -tags awg_adaptive -o ../dist/amneziawg-go-adaptive .
 
 На удалённом VPS уже должен работать AmneziaWG. Входной VPS передаёт исходные датаграммы AWG и возвращает ответы клиенту через тот же канал. Клиентские ключи и ключ VPN-сервера для работы релея не требуются. Для полных туннелей публичным адресом выхода остаётся адрес удалённого VPS.
 
-На межсерверном участке заголовки и содержимое AWG находятся внутри TLS. Снаружи видны TLS-соединения с доменом удалённого VPS и характеристики потока. На первом участке сохраняется транспорт AmneziaWG по UDP. При потере пакетов между VPS повторная передача TCP может увеличить задержку.
+На межсерверном участке заголовки и содержимое AWG находятся внутри TLS. Входной VPS проверяет сертификат удалённого VPS через `dialer.tls.secure: true`, а удалённый релей проверяет общий секрет. При подключении по IP укажите IP из поля SAN сертификата и задайте `dialer.tls.caFile` для самоподписанного сертификата. Сам туннель AWG зашифрован от клиента до VPN-сервера. При потере пакетов между VPS повторная передача TCP может увеличить задержку.
 
 ## Подготовка
 
@@ -123,7 +129,29 @@ sudo systemctl enable vpn-relay.service && sudo systemctl restart vpn-relay.serv
 
 ## Клиент и проверка
 
-Для нового клиента выполните на **удалённом VPS**, где запущен интерфейс AmneziaWG и доступна утилита `awg` с поддержкой AmneziaWG 3.1. Команда рассчитана на сервер с постоянным конфигурационным файлом в формате `awg-quick`. Подставьте имя интерфейса, путь к его файлу, свободный адрес в подсети туннеля и **адрес входного VPS**:
+На **удалённом VPS** с запущенным интерфейсом AmneziaWG и утилитой `awg` 3.1 сохраните настройки выпуска один раз. Подставьте имя интерфейса, его постоянный файл `awg-quick` и **адрес входного VPS**:
+
+```bash
+sudo vpn-relay-configure client-init \
+  --interface awg0 \
+  --server-config /etc/amnezia/amneziawg/awg0.conf \
+  --endpoint entry.example.net:51820 \
+  --dns 1.1.1.1
+```
+
+По умолчанию пул берётся из IPv4-подсети в поле `Address` сервера. При необходимости задайте пул явно через `--pool`, а исходящие маршруты через `--allowed-ips`. Для каждого нового клиента передавайте только имя файла:
+
+```bash
+sudo vpn-relay-configure client phone
+```
+
+Команда выпустит `/etc/vpn-relay/clients/phone.conf` с правами `0600` и автоматически выберет свободный адрес с учётом работающих и записанных peers. Для каждого устройства используйте отдельное имя. Для передачи через SSH обычному пользователю скопируйте профиль в его домашний каталог с правами `0600`:
+
+```bash
+sudo install -o "$(id -u)" -g "$(id -g)" -m 0600 /etc/vpn-relay/clients/phone.conf "$HOME/phone.conf"
+```
+
+Чтобы задать адрес и путь вручную, используйте полный вариант команды:
 
 ```bash
 sudo vpn-relay-configure client \

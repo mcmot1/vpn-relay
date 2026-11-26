@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager
 import getpass
 import ipaddress
+import json
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,7 @@ import tempfile
 
 
 CONFIG_DIR = Path('/etc/vpn-relay')
+DEFAULT_ROUTES = '0.0.0.0/0'
 AWG_SETTINGS = (
     'Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'S3', 'S4', 'H1', 'H2', 'H3', 'H4',
     'I1', 'I2', 'I3', 'I4', 'I5', 'HeaderProtectionKey', 'ContentPaddingAddition',
@@ -145,14 +147,86 @@ def read_awg_config(text):
     return interface, allowed_ips
 
 
+def tunnel_addresses(interface):
+    return [ipaddress.ip_interface(item.strip()) for item in interface.get('address', '').split(',') if item.strip()]
+
+
+def client_routes(value):
+    return ', '.join(str(ipaddress.ip_network(item.strip())) for item in value.split(','))
+
+
+def client_dns(value):
+    return ', '.join(str(ipaddress.ip_address(item.strip())) for item in value.split(',')) if value else ''
+
+
+def save_client_defaults(args):
+    server_path = args.server_config.resolve(strict=True)
+    stored, _ = read_awg_config(server_path.read_text())
+    if not stored.get('privatekey'):
+        raise ValueError('the server file has no [Interface] PrivateKey')
+    addresses = tunnel_addresses(stored)
+    if args.pool:
+        pool = ipaddress.ip_network(args.pool)
+        networks = [item.network for item in addresses
+                    if item.version == pool.version and item.network.prefixlen < item.max_prefixlen]
+        if networks and not any(pool.subnet_of(network) for network in networks):
+            raise ValueError('the pool must fit within a server tunnel subnet')
+    else:
+        networks = [item.network for item in addresses
+                    if item.version == 4 and item.network.prefixlen < item.max_prefixlen]
+        if len(networks) != 1:
+            raise ValueError('specify --pool when the server file does not contain exactly one IPv4 tunnel subnet')
+        pool = networks[0]
+    defaults = dict(interface=args.interface, server_config=str(server_path), endpoint=args.endpoint,
+                    pool=str(pool), allowed_ips=client_routes(args.allowed_ips), dns=client_dns(args.dns))
+    replace_file(CONFIG_DIR / 'client-defaults.json', (json.dumps(defaults, indent=2) + '\n').encode())
+    print(f'Saved client defaults. Address pool: {pool}. Next: sudo vpn-relay-configure client phone')
+
+
+def next_client_address(pool, server_addresses, peer_networks):
+    # Skip the reserved network/broadcast addresses, matching ipaddress.hosts().
+    first = int(pool.network_address) + (pool.prefixlen < pool.max_prefixlen - 1)
+    last = int(pool.broadcast_address) - (pool.version == 4 and pool.prefixlen < 31)
+    reserved = [item for item in peer_networks if item.version == pool.version and item.overlaps(pool)]
+    reserved.extend(ipaddress.ip_network(item.ip) for item in server_addresses if item.ip in pool)
+    for block in sorted(reserved, key=lambda item: item.network_address):
+        if int(block.network_address) > first:
+            break
+        first = max(first, int(block.broadcast_address) + 1)
+    if first > last:
+        raise ValueError(f'no free client address in {pool}')
+    return ipaddress.ip_interface(type(pool.network_address)(first))
+
+
+def resolve_client_args(args):
+    if not args.name:
+        if not all((args.interface, args.server_config, args.address, args.endpoint, args.output)):
+            raise ValueError('give a profile name or use --interface, --server-config, --address, --endpoint and --output')
+        args.allowed_ips = args.allowed_ips or DEFAULT_ROUTES
+        return args
+
+    if any((args.interface, args.server_config, args.address, args.endpoint, args.output, args.dns, args.allowed_ips)):
+        raise ValueError('use a profile name alone, or provide the explicit client options')
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}', args.name):
+        raise ValueError('profile name must use letters, numbers, dots, underscores or hyphens, without a path')
+    defaults_path = CONFIG_DIR / 'client-defaults.json'
+    if not defaults_path.is_file():
+        raise ValueError('run sudo vpn-relay-configure client-init first')
+    defaults = json.loads(defaults_path.read_text())
+    filename = args.name if args.name.endswith('.conf') else args.name + '.conf'
+    output_dir = CONFIG_DIR / 'clients'
+    output_dir.mkdir(mode=0o700, exist_ok=True)
+    return argparse.Namespace(interface=defaults['interface'], server_config=Path(defaults['server_config']),
+                              endpoint=defaults['endpoint'], pool=ipaddress.ip_network(defaults['pool']),
+                              allowed_ips=defaults['allowed_ips'], dns=defaults['dns'],
+                              address=None, output=output_dir / filename)
+
+
 def create_client(args):
     if not re.fullmatch(r'[a-zA-Z0-9_.-]{1,15}', args.interface) or args.interface.startswith('-'):
         raise ValueError('invalid AWG interface name')
-    address = ipaddress.ip_interface(args.address)
-    if address.network.prefixlen != address.max_prefixlen:
-        raise ValueError('client address must be a single host (/32 for IPv4 or /128 for IPv6)')
-    routes = ', '.join(str(ipaddress.ip_network(item.strip())) for item in args.allowed_ips.split(','))
-    dns = ', '.join(str(ipaddress.ip_address(item.strip())) for item in args.dns.split(',')) if args.dns else ''
+    routes = client_routes(args.allowed_ips)
+    dns = client_dns(args.dns)
     server_path = args.server_config.resolve(strict=True)
     output = args.output.absolute()
     if output.suffix != '.conf' or output.exists():
@@ -163,10 +237,17 @@ def create_client(args):
     server_public = run('awg', 'show', args.interface, 'public-key')
     if not stored.get('privatekey') or run('awg', 'pubkey', input_text=stored['privatekey'] + '\n') != server_public:
         raise ValueError('the server config does not belong to the running AWG interface')
-    if any(address.ip in network for network in stored_peers + active_peers):
+    server_addresses = tunnel_addresses(stored)
+    peers = stored_peers + active_peers
+    if args.address:
+        address = ipaddress.ip_interface(args.address)
+    else:
+        address = next_client_address(args.pool, server_addresses, peers)
+    if address.network.prefixlen != address.max_prefixlen:
+        raise ValueError('client address must be a single host (/32 for IPv4 or /128 for IPv6)')
+    if any(address.ip in network for network in peers):
         raise ValueError(f'{address.ip} overlaps an existing peer AllowedIPs range')
-    if stored.get('address'):
-        server_addresses = [ipaddress.ip_interface(item.strip()) for item in stored['address'].split(',')]
+    if server_addresses:
         if address.ip in [item.ip for item in server_addresses]:
             raise ValueError('client address is already assigned to the server')
         networks = [item.network for item in server_addresses
@@ -218,14 +299,18 @@ def main():
     for role in (ingress, egress):
         role.add_argument('--wss-port', type=port, default=443)
         role.add_argument('--awg-port', type=port, default=51821)
+    defaults = subparsers.add_parser('client-init', help='save the settings for name-only client creation')
+    defaults.add_argument('--pool', help='address pool, defaults to the server IPv4 subnet')
     client = subparsers.add_parser('client', help='create a client profile and register its peer')
-    client.add_argument('--interface', required=True)
-    client.add_argument('--server-config', required=True, type=Path)
-    client.add_argument('--address', required=True, help='unused tunnel address, such as 10.8.0.2/32')
-    client.add_argument('--endpoint', required=True, type=endpoint, help='public ingress address with UDP port')
-    client.add_argument('--output', required=True, type=Path)
-    client.add_argument('--allowed-ips', default='0.0.0.0/0')
-    client.add_argument('--dns')
+    client.add_argument('name', nargs='?', help='profile name, for example phone or phone.conf')
+    client.add_argument('--address', help='unused tunnel address, such as 10.8.0.2/32')
+    client.add_argument('--output', type=Path)
+    for profile, required in ((defaults, True), (client, False)):
+        profile.add_argument('--interface', required=required)
+        profile.add_argument('--server-config', required=required, type=Path)
+        profile.add_argument('--endpoint', required=required, type=endpoint, help='public ingress address with UDP port')
+        profile.add_argument('--allowed-ips', default=DEFAULT_ROUTES if required else None)
+        profile.add_argument('--dns')
     args = parser.parse_args()
 
     if sys.platform != 'linux':
@@ -238,8 +323,10 @@ def main():
     try:
         with (CONFIG_DIR / '.configure.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            if args.role == 'client':
-                create_client(args)
+            if args.role == 'client-init':
+                save_client_defaults(args)
+            elif args.role == 'client':
+                create_client(resolve_client_args(args))
             else:
                 configure_relay(args)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

@@ -1,4 +1,5 @@
 import argparse
+import ipaddress
 from pathlib import Path
 import subprocess
 import tempfile
@@ -73,6 +74,38 @@ class ConfigureTest(unittest.TestCase):
         self.assertIn('PublicKey = client-public\nPresharedKey = psk\nAllowedIPs = 10.8.0.2/32',
                       args.server_config.read_text())
         self.assertEqual(awg.call_args.args[:5], ('awg', 'set', 'awg0', 'peer', 'client-public'))
+
+    def test_client_by_name_uses_defaults_and_skips_assigned_addresses(self):
+        args = self.client_args()
+        args.pool = None
+        args.server_config.write_text(SERVER_CONFIG + '\n[Peer]\nAllowedIPs = 10.8.0.2/32\n')
+        configure.save_client_defaults(args)
+        stored = argparse.Namespace(name='phone.conf', interface=None, server_config=None, address=None,
+                                    endpoint=None, output=None, allowed_ips=None, dns=None)
+        args = configure.resolve_client_args(stored)
+        active = ACTIVE_CONFIG + '\n[Peer]\nAllowedIPs = 10.8.0.3/32\n'
+        outputs = [active, 'server-public', 'server-public', 'client-private', 'client-public', 'psk', '']
+        with patch.object(configure, 'run', side_effect=outputs):
+            configure.create_client(args)
+        self.assertEqual(args.output, self.directory / 'clients' / 'phone.conf')
+        self.assertIn('Address = 10.8.0.4/32', args.output.read_text())
+        self.assertIn('Endpoint = entry.example.net:51820', args.output.read_text())
+        self.assertIn('AllowedIPs = 10.8.0.4/32', args.server_config.read_text())
+        with self.assertRaisesRegex(ValueError, 'new output file'):
+            configure.create_client(args)
+
+    def test_client_pool_skips_ranges_and_stops_when_full(self):
+        pool = ipaddress.ip_network('fd00::/64')
+        occupied = [ipaddress.ip_network('fd00::/65')]
+        self.assertEqual(str(configure.next_client_address(pool, [], occupied)), 'fd00::8000:0:0:0/128')
+        with self.assertRaisesRegex(ValueError, 'no free client address'):
+            configure.next_client_address(pool, [], [pool])
+
+    def test_client_by_name_rejects_paths(self):
+        args = argparse.Namespace(name='../phone', interface=None, server_config=None, address=None,
+                                  endpoint=None, output=None, allowed_ips=None, dns=None)
+        with self.assertRaisesRegex(ValueError, 'without a path'):
+            configure.resolve_client_args(args)
 
     def test_client_rejects_existing_active_route(self):
         args = self.client_args()
