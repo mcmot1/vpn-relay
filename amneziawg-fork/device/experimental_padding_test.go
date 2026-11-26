@@ -61,19 +61,25 @@ func TestPaddingProfilesOnFixedLengths(t *testing.T) {
 	sizes := []int{64, 96, 176, 320, 576, 896, 1152, 1184}
 	const samplesPerSize = 4096
 	const limit = 1200
+	stock := Peer{device: &Device{}}
+	stock.udpWindow.Store(limit)
+	stock.device.contentPaddingAddition.Store(UintRange(80) << 32) // Upstream range 0–80.
+	var adaptive adaptivePaddingBudget
 	for _, profile := range []struct {
 		name  string
 		extra func(int, int) int
 	}{
 		{"baseline", func(int, int) int { return 0 }},
+		{"stock-content-padding-0-80", func(size, _ int) int { return stock.randomPaddingAddition(size) }},
 		{"grid", experimentalExtraPadding},
 		{"smooth", smoothExtraPadding},
+		{"adaptive", adaptive.extra},
 	} {
 		t.Run(profile.name, func(t *testing.T) {
-			var histogram [limit + 1]int
-			var distinct, extraBytes, inputBytes, gridPackets int
-			for _, size := range sizes {
-				for range samplesPerSize {
+			var histogram, smallHistogram [limit + 1]int
+			var distinct, extraBytes, inputBytes, gridPackets, smallSamples int
+			for range samplesPerSize {
+				for _, size := range sizes {
 					padding := profile.extra(size, limit)
 					length := size + padding
 					if length < size || length > limit {
@@ -83,6 +89,10 @@ func TestPaddingProfilesOnFixedLengths(t *testing.T) {
 						distinct++
 					}
 					histogram[length]++
+					if size <= adaptiveSmallPacketLimit {
+						smallHistogram[length]++
+						smallSamples++
+					}
 					extraBytes += padding
 					inputBytes += size
 					if length%experimentalSizeStep < experimentalSizeJitter {
@@ -90,9 +100,19 @@ func TestPaddingProfilesOnFixedLengths(t *testing.T) {
 					}
 				}
 			}
-			t.Logf("distinct lengths: %d, in grid bands: %.1f%%, added bytes: %.1f%%",
+			t.Logf("distinct lengths: %d, in grid bands: %.1f%%, added bytes: %.1f%%, same-length pairs: %.2f%% (small: %.2f%%)",
 				distinct, 100*float64(gridPackets)/float64(len(sizes)*samplesPerSize),
-				100*float64(extraBytes)/float64(inputBytes))
+				100*float64(extraBytes)/float64(inputBytes),
+				sameLengthPairPercentage(histogram[:], len(sizes)*samplesPerSize),
+				sameLengthPairPercentage(smallHistogram[:], smallSamples))
 		})
 	}
+}
+
+func sameLengthPairPercentage(histogram []int, samples int) float64 {
+	var matchingPairs int64
+	for _, count := range histogram {
+		matchingPairs += int64(count) * int64(count-1)
+	}
+	return 100 * float64(matchingPairs) / float64(int64(samples)*int64(samples-1))
 }

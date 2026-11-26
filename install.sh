@@ -3,13 +3,14 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: bash install.sh ingress|egress|vpn [baseline|experimental|smooth]
+Usage: bash install.sh ingress|egress|vpn [baseline|experimental|smooth|adaptive]
 
   ingress          Install the GOST ingress relay and its configuration template.
   egress           Install the GOST egress relay and its configuration template.
   vpn              Install the experimental userspace AmneziaWG binary.
   vpn baseline     Install the baseline userspace AmneziaWG binary.
   vpn smooth       Install AmneziaWG with the experimental padding without size buckets.
+  vpn adaptive     Install AmneziaWG with per-peer adaptive padding limits.
 EOF
 }
 
@@ -21,7 +22,7 @@ fail() {
 case ${1:-} in
     -h|--help) usage; exit 0 ;;
     ingress|egress) [[ $# -eq 1 ]] || fail 'Expected one relay role.' ;;
-    vpn) [[ $# -le 2 && ${2:-experimental} =~ ^(baseline|experimental|smooth)$ ]] || fail 'Invalid VPN build variant.' ;;
+    vpn) [[ $# -le 2 && ${2:-experimental} =~ ^(baseline|experimental|smooth|adaptive)$ ]] || fail 'Invalid VPN build variant.' ;;
     *) usage >&2; exit 2 ;;
 esac
 
@@ -56,6 +57,7 @@ if [[ $1 == vpn ]]; then
         case $variant in
             experimental) build_flags+=(-tags awg_experimental) ;;
             smooth) build_flags+=(-tags awg_smooth) ;;
+            adaptive) build_flags+=(-tags awg_adaptive) ;;
         esac
         binary_path=$work_dir/$binary
         (

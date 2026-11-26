@@ -627,9 +627,12 @@ func (device *Device) RoutineEncryption(id int) {
 			}
 			if experimentalPaddingProfile != paddingProfileBaseline && !elem.isKeepalive && mtu > 0 {
 				sizeLimit := min(int(elem.peer.udpWindow.Load()), mtu+MinMessageSize+int(elem.padding), len(elem.buffer))
-				if experimentalPaddingProfile == paddingProfileSmooth {
+				switch experimentalPaddingProfile {
+				case paddingProfileAdaptive:
+					paddingSize += elem.peer.adaptivePadding.extra(packetSize+paddingSize, sizeLimit)
+				case paddingProfileSmooth:
 					paddingSize += smoothExtraPadding(packetSize+paddingSize, sizeLimit)
-				} else {
+				case paddingProfileGrid:
 					paddingSize += experimentalExtraPadding(packetSize+paddingSize, sizeLimit)
 				}
 			}

@@ -13,6 +13,7 @@ const (
 	paddingProfileBaseline = iota
 	paddingProfileGrid
 	paddingProfileSmooth
+	paddingProfileAdaptive
 )
 
 func smoothPaddingBudgetFor(paddedSize, sizeLimit int) int {

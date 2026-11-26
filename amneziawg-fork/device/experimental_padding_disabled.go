@@ -1,4 +1,4 @@
-//go:build !awg_experimental && !awg_smooth
+//go:build !awg_experimental && !awg_smooth && !awg_adaptive
 
 // SPDX-License-Identifier: MIT
 
